@@ -1,0 +1,8 @@
+name = "wiqar-backend"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# Secrets are set with `wrangler secret put SALLA_TOKEN` — never here.
+# [vars]
+# SALLA_APP_NAME = "wiqar-backend"
+# SALLA_APP_VERSION = "0.1.0"

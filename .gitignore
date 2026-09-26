@@ -1,0 +1,8 @@
+node_modules/
+.wrangler/
+.dev.vars
+
+# secrets never land in git
+.env
+.env.*
+!.env.example
