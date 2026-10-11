@@ -2,14 +2,14 @@ name = "wiqar-backend"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
 
-# Secrets are set with `wrangler secret put SALLA_TOKEN` — never here.
-# [vars]
-# SALLA_APP_NAME = "wiqar-backend"
-# SALLA_APP_VERSION = "0.1.0"
+[vars]
+# Store-Identifier for storefront calls — the merchant number, not the username.
+SALLA_STORE = "943760928"
+SALLA_APP_VERSION = "2.14.591"
 
-# Production keeps the store's tokens in KV so they survive restarts and the
-# refresh rotation. Create the namespace once, then uncomment:
-#   wrangler kv namespace create TOKENS
-# [[kv_namespaces]]
-# binding = "TOKENS"
-# id = "paste the id wrangler prints"
+[[kv_namespaces]]
+binding = "TOKENS"
+id = "f6f48791703842c7a51a864804f52b71"
+
+# The OAuth pair and the webhook secret live as Cloudflare secrets:
+#   wrangler secret put SALLA_CLIENT_ID / SALLA_CLIENT_SECRET / WEBHOOK_SECRET

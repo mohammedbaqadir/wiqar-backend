@@ -1,10 +1,12 @@
 import {
-  addItem,
-  createCart,
+  addToCart,
+  catalogueIndex,
+  createProduct,
+  latestCart,
   listCategories,
   listProducts,
   SallaError,
-  type CartLine,
+  updateProduct,
   type SallaConfig,
 } from './salla';
 import {
@@ -24,7 +26,7 @@ export interface Env {
   SALLA_TOKEN?: string;
   SALLA_CLIENT_ID?: string;
   SALLA_CLIENT_SECRET?: string;
-  SALLA_APP_NAME?: string;
+  /** Sent to the storefront API as S-APP-VERSION. */
   SALLA_APP_VERSION?: string;
   /** Overridable so the flow can be rehearsed against a local mock. */
   SALLA_API_BASE?: string;
@@ -42,7 +44,7 @@ const json = (data: unknown, status = 200): Response =>
       /* The storefront is a different origin; this is the CORS Salla itself does not send. */
       'access-control-allow-origin': '*',
       'access-control-allow-headers': 'content-type',
-      'access-control-allow-methods': 'GET, POST, OPTIONS',
+      'access-control-allow-methods': 'GET, POST, PUT, OPTIONS',
     },
   });
 
@@ -50,8 +52,7 @@ const configFrom = (env: Env): SallaConfig | null =>
   env.SALLA_STORE
     ? {
         store: env.SALLA_STORE,
-        appName: env.SALLA_APP_NAME ?? 'wiqar-backend',
-        appVersion: env.SALLA_APP_VERSION ?? '0.1.0',
+        appVersion: env.SALLA_APP_VERSION ?? '2.14.591',
         apiBase: env.SALLA_API_BASE ?? 'https://api.salla.dev',
         authBase: env.SALLA_AUTH_BASE ?? 'https://accounts.salla.sa',
         clientId: env.SALLA_CLIENT_ID,
@@ -129,35 +130,38 @@ export default {
     }
 
     const item = pathname.match(/^\/cart\/([^/]+)\/items$/);
+    const adminProduct = pathname.match(/^\/admin\/products(?:\/([^/]+))?$/);
 
     /* Which routes exist, before anything about configuration. */
     const isCatalog = pathname === '/catalog' && request.method === 'GET';
     const isCategories = pathname === '/categories' && request.method === 'GET';
     const isCart = pathname === '/cart' && request.method === 'POST';
     const isItem = item !== null && request.method === 'POST';
+    const isProductCreate = adminProduct !== null && !adminProduct[1] && request.method === 'POST';
+    const isProductUpdate = adminProduct !== null && Boolean(adminProduct[1]) && request.method === 'PUT';
 
-    if (!isCatalog && !isCategories && !isCart && !isItem) {
+    if (!isCatalog && !isCategories && !isCart && !isItem && !isProductCreate && !isProductUpdate) {
       return json({ status: false, error: { code: 'not_found', message: 'No such route.' } }, 404);
     }
 
     /* A malformed request is the caller's problem, not the configuration's. */
-    let line: CartLine | null = null;
+    let identifier: number | string | null = null;
+    let quantity = 1;
     if (isItem) {
       const body = (await request.json().catch(() => ({}))) as {
         identifier?: unknown;
         quantity?: unknown;
-        options?: Array<{ name: string; value: string }>;
       };
 
-      const identifier = body.identifier;
-      const identifierType =
-        typeof identifier === 'number'
-          ? ('id' as const)
-          : typeof identifier === 'string' && identifier.trim() !== ''
-            ? ('sku' as const)
+      const raw = body.identifier;
+      identifier =
+        typeof raw === 'number'
+          ? raw
+          : typeof raw === 'string' && raw.trim() !== ''
+            ? raw.trim()
             : null;
 
-      if (!identifierType) {
+      if (identifier === null) {
         return json(
           {
             status: false,
@@ -171,12 +175,9 @@ export default {
         );
       }
 
-      line = {
-        identifier_type: identifierType,
-        identifier: identifier as number | string,
-        quantity: typeof body.quantity === 'number' ? body.quantity : 1,
-        options: body.options,
-      };
+      if (typeof body.quantity === 'number' && Number.isFinite(body.quantity) && body.quantity > 0) {
+        quantity = Math.floor(body.quantity);
+      }
     }
 
     const config = configFrom(env);
@@ -203,8 +204,53 @@ export default {
         const token = await freshAccessToken(env.TOKENS, env.SALLA_TOKEN, refreshContext(env, config));
         return json(await listCategories(config, token));
       }
-      if (isCart) return json(await createCart(config));
-      if (isItem && item && line) return json(await addItem(config, item[1], line));
+      if (isCart) {
+        const token = await freshAccessToken(env.TOKENS, env.SALLA_TOKEN, refreshContext(env, config));
+        const index = await catalogueIndex(config, token);
+        const cart = (await latestCart(config)) as {
+          data?: { id?: unknown; cart?: { id?: unknown } };
+        };
+        const cartId = cart?.data?.cart?.id ?? cart?.data?.id;
+        if (cartId === undefined || cartId === null) return json(cart);
+        return json({
+          status: true,
+          data: {
+            id: cartId,
+            checkout_url: index.storefrontBase
+              ? `${index.storefrontBase}/checkout/${encodeURIComponent(String(cartId))}`
+              : '',
+          },
+        });
+      }
+      if (isItem && item && identifier !== null) {
+        const token = await freshAccessToken(env.TOKENS, env.SALLA_TOKEN, refreshContext(env, config));
+        const index = await catalogueIndex(config, token);
+        const productId =
+          typeof identifier === 'number' ? identifier : index.bySku.get(identifier.toUpperCase());
+        if (productId === undefined) {
+          return json(
+            {
+              status: false,
+              error: {
+                code: 'product_not_found',
+                message: `لا يوجد منتج برقم الصنف ${identifier} في متجر سلة.`,
+              },
+            },
+            404
+          );
+        }
+        return json(await addToCart(config, item[1], productId, quantity));
+      }
+      if (isProductCreate) {
+        const token = await freshAccessToken(env.TOKENS, env.SALLA_TOKEN, refreshContext(env, config));
+        const body = await request.json().catch(() => null);
+        return json(await createProduct(config, token, body));
+      }
+      if (isProductUpdate && adminProduct?.[1]) {
+        const token = await freshAccessToken(env.TOKENS, env.SALLA_TOKEN, refreshContext(env, config));
+        const body = await request.json().catch(() => null);
+        return json(await updateProduct(config, token, adminProduct[1], body));
+      }
 
       return json({ status: false, error: { code: 'not_found', message: 'No such route.' } }, 404);
     } catch (error) {
