@@ -1,74 +1,84 @@
 # wiqar-backend
 
-The runtime piece behind the **وقار** storefront. Salla is the store of record — products, stock,
-carts, orders, payments. This service is the only thing that talks to Salla's API, because:
+The runtime piece behind وقار's storefront. Salla is the store of record — products, stock,
+carts, orders, payments. This worker is the only thing that talks to Salla:
 
-- **Salla's API refuses browsers.** Its preflight response carries no `Access-Control-Allow-Origin`,
-  so a page cannot call it. The call has to be server-to-server.
-- **The token must never ship.** Anything sent to a browser is public. The app secret and the
-  store's access token live here, in environment variables, and nowhere else.
+- **Salla's API refuses browsers.** Its responses carry no CORS headers, so every call has to be
+  server-to-server.
+- **The token must never ship.** The app secret and the store's access token live here — in
+  Cloudflare secrets and KV — and nowhere a browser can see.
 
-It exists as its own repository on purpose: the storefront does not depend on it structurally, so
-this implementation can be developed, replaced, or abandoned without touching the shop.
+A sibling of `wiqar-storefront` (github.com/mohammedbaqadir/wiqar-storefront): the storefront
+builds and browses without it; buying runs through it.
 
 ## Routes
 
 | route | method | what it does |
 |---|---|---|
-| `/health` | GET | liveness, and whether Salla credentials are configured |
-| `/catalog` | GET | the store's products, straight from Salla (`?page=` supported) |
-| `/cart` | POST | creates a guest cart; the response carries Salla's `checkout_url` |
-| `/cart/:id/items` | POST | adds a line — `{ identifier, quantity, options? }`, identified by product id (number) or sku (string) |
-| `/webhooks/salla` | POST | Salla's events; verifies `X-Salla-Signature` and stores or clears the store's tokens |
+| `/health` | GET | liveness; whether the store is configured and its tokens are in KV |
+| `/catalog` | GET | the store's Salla catalogue as-is (`?page=`) — for reading and alignment, not part of the storefront build |
+| `/categories` | GET | the store's categories |
+| `/cart` | POST | mints a guest cart; answers `{status, data: {id, checkout_url}}` |
+| `/cart/:id/items` | POST | adds one line — `{identifier, quantity}`; identifier is a SKU (string) or a product id (number) |
+| `/admin/products` | POST | creates a product (scope `products.read_write`) — groundwork for catalogue imports |
+| `/admin/products/:id` | PUT | updates a product |
+| `/webhooks/salla` | POST | verifies `X-Salla-Signature`; stores tokens on `app.store.authorize`, clears them on `app.uninstalled` |
 
-Without `SALLA_STORE` every route except `/health` and the webhook answers `503` with a
-machine-readable error. The store's tokens arrive via the `app.store.authorize` webhook
-(Easy Mode), live in KV, and refresh themselves three days before the two-week expiry.
+Without `SALLA_STORE`, everything except `/health` and the webhook answers `503` with a
+machine-readable error.
 
-## The Salla surface it uses (verified against Salla's docs)
+## The Salla surface it uses (verified against the live store)
 
 | purpose | call | notes |
 |---|---|---|
-| products | `GET https://api.salla.dev/admin/v2/products` | paginated `data[]`, scope `products.read`, `Authorization: Bearer <token>` |
-| categories | `GET https://api.salla.dev/admin/v2/categories` | scope `categories.read` |
-| create a cart | `POST https://api.salla.dev/store/v2/checkout/generate` | guest cart; no token needed, but store-scoped |
-| add a line | `POST /store/v2/checkout/{cart}/items` | identify by `id`, `variant_id` or `sku` + `quantity` |
+| products / categories | `GET https://api.salla.dev/admin/v2/products` · `/categories` | `Authorization: Bearer <token>` |
+| guest cart | `GET https://api.salla.dev/store/v1/cart/latest` | the storefront v1 API Salla's own themes use; no token needed |
+| add a line | `POST https://api.salla.dev/store/v1/cart/{cart}/item/{product}/add` with `{id, quantity}` | by **product id** — the worker resolves SKU → id from the catalogue first |
 
-Required headers on the checkout calls: `Store-Identifier`, `s-source: app`, `s-app-name`,
-`s-app-version`. Errors follow Salla's envelope (`error.code`, `error.message`, `error.fields`).
+Two hard-won facts:
+
+- **`Store-Identifier` is the store's merchant number, not its username.** `943760928`, not
+  `wiqar-store` — the username resolves to an empty face of the store, which is why early
+  product lookups answered `المنتج غير موجود`.
+- **The v2 checkout API (`/store/v2/checkout/…`) rejects items on this store.** Its product
+  lookup fails even for freshly created products. The v1 storefront cart is what works — it is
+  the API Salla's themes themselves use; don't re-walk the v2 path blindly.
+
+## Store facts and findings
+
+- The store's products match the storefront catalogue by SKU (`WQ-001` … `WQ-035`).
+- **Demo stores cannot complete orders.** Salla blocks the final step with
+  `لا يمكن إتمام الطلب من متجر تجريبي` — carts build, checkout refuses. Real orders wait on a
+  real (non-demo) Salla store; when it exists, only `SALLA_STORE` here and a fresh app install
+  there change.
+- The Salla app ("واجهة وقار للمتجر", Easy Mode, signature webhooks) lives in the Partners
+  Portal; its secrets never appear in this repo.
+
+## Tokens
+
+The signed `app.store.authorize` webhook delivers the OAuth pair; it lives in the `TOKENS` KV
+namespace. Access tokens last two weeks; refresh tokens are single-use and rotate on every
+refresh — the new pair is persisted before use and refreshes are single-flight (`src/tokens.ts`).
+A dead refresh chain means a reinstall, not a lost store.
+
+## Environment
+
+- `wrangler.toml` [vars]: `SALLA_STORE` (the merchant number), `SALLA_APP_VERSION`.
+- Cloudflare secrets (`bunx wrangler secret put …`): `SALLA_CLIENT_ID`, `SALLA_CLIENT_SECRET`,
+  `WEBHOOK_SECRET`.
+- Local: `.dev.vars` mirrors the secret names. `SALLA_API_BASE` / `SALLA_AUTH_BASE` can point at
+  a mock to rehearse the flow — and note workerd's sockets are unreachable on this machine, so
+  run the worker under Bun when testing locally.
 
 ## Running it
 
 ```sh
 bun install
-bun run dev        # wrangler dev — serves locally, no account needed
-bun run deploy     # wrangler deploy — Cloudflare Workers, free tier is plenty
+bun run dev        # wrangler dev
+bun run deploy     # wrangler deploy — Cloudflare Workers
 ```
-
-Environment (`.env.example`):
-
-```
-SALLA_STORE=your-store-identifier
-SALLA_TOKEN=the app's access token
-SALLA_APP_NAME=wiqar-backend
-SALLA_APP_VERSION=0.1.0
-```
-
-In production these are Cloudflare secrets, never committed and never sent to a browser.
-
-## Open questions — do not assume these
-
-1. **Does a free Salla plan allow installing an app and taking online payments?** If it does not,
-   this service is moot until the plan changes. Unverified.
-2. **Token lifetime and refresh.** Answered: access tokens last 2 weeks; refresh tokens are
-   single-use and rotate on every refresh (1 month life; reuse revokes everything and forces a
-   reinstall). Implemented in `src/tokens.ts` — the new pair is persisted before use, refreshes
-   are single-flight.
-3. **Checkout handoff details.** The cart response carries a `checkout_url`; the storefront sends
-   the shopper there. Whether the cart survives that hop on the store's own plan is verified on
-   the demo store during setup.
 
 ## Not in scope yet
 
-Order reads and anything customer-level. Token refresh and the app webhooks are in; store
-webhooks (`order.created`, `product.*`) arrive when the shop needs notifications.
+Order reads and store webhooks (`order.created`, `product.*`) — they arrive when the shop needs
+notifications.
