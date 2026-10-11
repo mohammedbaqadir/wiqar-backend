@@ -1,12 +1,10 @@
 import {
   addToCart,
   catalogueIndex,
-  createProduct,
   latestCart,
   listCategories,
   listProducts,
   SallaError,
-  updateProduct,
   type SallaConfig,
 } from './salla';
 import {
@@ -44,7 +42,7 @@ const json = (data: unknown, status = 200): Response =>
       /* The storefront is a different origin; this is the CORS Salla itself does not send. */
       'access-control-allow-origin': '*',
       'access-control-allow-headers': 'content-type',
-      'access-control-allow-methods': 'GET, POST, PUT, OPTIONS',
+      'access-control-allow-methods': 'GET, POST, OPTIONS',
     },
   });
 
@@ -130,17 +128,14 @@ export default {
     }
 
     const item = pathname.match(/^\/cart\/([^/]+)\/items$/);
-    const adminProduct = pathname.match(/^\/admin\/products(?:\/([^/]+))?$/);
 
     /* Which routes exist, before anything about configuration. */
     const isCatalog = pathname === '/catalog' && request.method === 'GET';
     const isCategories = pathname === '/categories' && request.method === 'GET';
     const isCart = pathname === '/cart' && request.method === 'POST';
     const isItem = item !== null && request.method === 'POST';
-    const isProductCreate = adminProduct !== null && !adminProduct[1] && request.method === 'POST';
-    const isProductUpdate = adminProduct !== null && Boolean(adminProduct[1]) && request.method === 'PUT';
 
-    if (!isCatalog && !isCategories && !isCart && !isItem && !isProductCreate && !isProductUpdate) {
+    if (!isCatalog && !isCategories && !isCart && !isItem) {
       return json({ status: false, error: { code: 'not_found', message: 'No such route.' } }, 404);
     }
 
@@ -241,17 +236,6 @@ export default {
         }
         return json(await addToCart(config, item[1], productId, quantity));
       }
-      if (isProductCreate) {
-        const token = await freshAccessToken(env.TOKENS, env.SALLA_TOKEN, refreshContext(env, config));
-        const body = await request.json().catch(() => null);
-        return json(await createProduct(config, token, body));
-      }
-      if (isProductUpdate && adminProduct?.[1]) {
-        const token = await freshAccessToken(env.TOKENS, env.SALLA_TOKEN, refreshContext(env, config));
-        const body = await request.json().catch(() => null);
-        return json(await updateProduct(config, token, adminProduct[1], body));
-      }
-
       return json({ status: false, error: { code: 'not_found', message: 'No such route.' } }, 404);
     } catch (error) {
       if (error instanceof ReauthRequired) {

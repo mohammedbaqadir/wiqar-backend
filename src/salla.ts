@@ -159,31 +159,3 @@ export const addToCart = async (
     )
   );
 
-/** Create a product. Scope: products.read_write */
-export const createProduct = async (
-  config: SallaConfig,
-  token: string,
-  body: unknown
-): Promise<unknown> =>
-  read(
-    await fetch(`${adminBase(config)}/products`, {
-      method: 'POST',
-      headers: adminHeaders(token),
-      body: JSON.stringify(body),
-    })
-  );
-
-/** Update a product. Scope: products.read_write */
-export const updateProduct = async (
-  config: SallaConfig,
-  token: string,
-  id: string,
-  body: unknown
-): Promise<unknown> =>
-  read(
-    await fetch(`${adminBase(config)}/products/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      headers: adminHeaders(token),
-      body: JSON.stringify(body),
-    })
-  );
