@@ -1,10 +1,37 @@
-import { addItem, createCart, listCategories, listProducts, SallaError, type SallaConfig } from './salla';
+import {
+  addItem,
+  createCart,
+  listCategories,
+  listProducts,
+  SallaError,
+  type CartLine,
+  type SallaConfig,
+} from './salla';
+import {
+  clearTokens,
+  freshAccessToken,
+  loadTokens,
+  saveTokens,
+  ReauthRequired,
+  type RefreshContext,
+  type TokenStore,
+} from './tokens';
+import { signatureMatches, tokensFromAuthorize } from './webhooks';
 
 export interface Env {
   SALLA_STORE?: string;
+  /** Bootstrap token for a quick local run; the webhook supersedes it. */
   SALLA_TOKEN?: string;
+  SALLA_CLIENT_ID?: string;
+  SALLA_CLIENT_SECRET?: string;
   SALLA_APP_NAME?: string;
   SALLA_APP_VERSION?: string;
+  /** Overridable so the flow can be rehearsed against a local mock. */
+  SALLA_API_BASE?: string;
+  SALLA_AUTH_BASE?: string;
+  WEBHOOK_SECRET?: string;
+  /** KV holding the store's tokens in production; absent in bare local runs. */
+  TOKENS?: TokenStore;
 }
 
 const json = (data: unknown, status = 200): Response =>
@@ -20,14 +47,23 @@ const json = (data: unknown, status = 200): Response =>
   });
 
 const configFrom = (env: Env): SallaConfig | null =>
-  env.SALLA_STORE && env.SALLA_TOKEN
+  env.SALLA_STORE
     ? {
         store: env.SALLA_STORE,
-        token: env.SALLA_TOKEN,
         appName: env.SALLA_APP_NAME ?? 'wiqar-backend',
         appVersion: env.SALLA_APP_VERSION ?? '0.1.0',
+        apiBase: env.SALLA_API_BASE ?? 'https://api.salla.dev',
+        authBase: env.SALLA_AUTH_BASE ?? 'https://accounts.salla.sa',
+        clientId: env.SALLA_CLIENT_ID,
+        clientSecret: env.SALLA_CLIENT_SECRET,
       }
     : null;
+
+const refreshContext = (env: Env, config: SallaConfig): RefreshContext => ({
+  authBase: config.authBase,
+  clientId: env.SALLA_CLIENT_ID ?? '',
+  clientSecret: env.SALLA_CLIENT_SECRET ?? '',
+});
 
 const failure = (error: unknown): Response => {
   if (error instanceof SallaError) {
@@ -48,8 +84,48 @@ export default {
 
     if (request.method === 'OPTIONS') return json({ status: true });
 
+    /* The webhook runs before anything else is configured — it delivers the tokens. */
+    if (pathname === '/webhooks/salla' && request.method === 'POST') {
+      const raw = await request.text();
+      const secret = env.WEBHOOK_SECRET;
+      const signature = request.headers.get('x-salla-signature') ?? '';
+      if (!secret || !signature || !(await signatureMatches(secret, raw, signature))) {
+        return json(
+          { status: false, error: { code: 'unauthorized', message: 'Signature mismatch.' } },
+          401
+        );
+      }
+
+      let body: { event?: unknown; data?: unknown } | null = null;
+      try {
+        body = JSON.parse(raw) as { event?: unknown; data?: unknown };
+      } catch {
+        return json({ status: false, error: { code: 'bad_request', message: 'Body is not JSON.' } }, 400);
+      }
+
+      const event = String(body?.event ?? '');
+      if (event === 'app.store.authorize') {
+        const tokens = tokensFromAuthorize(body?.data);
+        if (tokens) await saveTokens(env.TOKENS, tokens);
+        console.log(`app.store.authorize: ${tokens ? 'tokens stored' : 'payload unusable'}`);
+        return json({ status: Boolean(tokens) });
+      }
+      if (event === 'app.uninstalled') {
+        await clearTokens(env.TOKENS);
+        console.log('app.uninstalled: tokens cleared');
+        return json({ status: true });
+      }
+      console.log(`webhook ignored: ${event}`);
+      return json({ status: true });
+    }
+
     if (pathname === '/health') {
-      return json({ ok: true, configured: configFrom(env) !== null });
+      return json({
+        ok: true,
+        configured: configFrom(env) !== null,
+        authorized: (await loadTokens(env.TOKENS, env.SALLA_TOKEN)) !== null,
+        refreshable: Boolean(env.SALLA_CLIENT_ID && env.SALLA_CLIENT_SECRET),
+      });
     }
 
     const item = pathname.match(/^\/cart\/([^/]+)\/items$/);
@@ -65,8 +141,7 @@ export default {
     }
 
     /* A malformed request is the caller's problem, not the configuration's. */
-    let line: { identifier: number; quantity: number; options?: Array<{ name: string; value: string }> } | null =
-      null;
+    let line: CartLine | null = null;
     if (isItem) {
       const body = (await request.json().catch(() => ({}))) as {
         identifier?: unknown;
@@ -74,13 +149,21 @@ export default {
         options?: Array<{ name: string; value: string }>;
       };
 
-      if (typeof body.identifier !== 'number') {
+      const identifier = body.identifier;
+      const identifierType =
+        typeof identifier === 'number'
+          ? ('id' as const)
+          : typeof identifier === 'string' && identifier.trim() !== ''
+            ? ('sku' as const)
+            : null;
+
+      if (!identifierType) {
         return json(
           {
             status: false,
             error: {
               code: 'validation_error',
-              message: 'identifier must be a number',
+              message: 'identifier must be a product id (number) or a sku (string)',
               fields: { identifier: ['required'] },
             },
           },
@@ -89,7 +172,8 @@ export default {
       }
 
       line = {
-        identifier: body.identifier,
+        identifier_type: identifierType,
+        identifier: identifier as number | string,
         quantity: typeof body.quantity === 'number' ? body.quantity : 1,
         options: body.options,
       };
@@ -103,7 +187,7 @@ export default {
           status: false,
           error: {
             code: 'not_configured',
-            message: 'SALLA_STORE and SALLA_TOKEN are not set for this deployment.',
+            message: 'SALLA_STORE is not set for this deployment.',
           },
         },
         503
@@ -111,13 +195,25 @@ export default {
     }
 
     try {
-      if (isCatalog) return json(await listProducts(config, Number(searchParams.get('page') ?? '1')));
-      if (isCategories) return json(await listCategories(config));
+      if (isCatalog) {
+        const token = await freshAccessToken(env.TOKENS, env.SALLA_TOKEN, refreshContext(env, config));
+        return json(await listProducts(config, token, Number(searchParams.get('page') ?? '1')));
+      }
+      if (isCategories) {
+        const token = await freshAccessToken(env.TOKENS, env.SALLA_TOKEN, refreshContext(env, config));
+        return json(await listCategories(config, token));
+      }
       if (isCart) return json(await createCart(config));
       if (isItem && item && line) return json(await addItem(config, item[1], line));
 
       return json({ status: false, error: { code: 'not_found', message: 'No such route.' } }, 404);
     } catch (error) {
+      if (error instanceof ReauthRequired) {
+        return json(
+          { status: false, error: { code: 'not_authorized', message: error.message } },
+          503
+        );
+      }
       return failure(error);
     }
   },

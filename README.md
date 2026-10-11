@@ -18,10 +18,12 @@ this implementation can be developed, replaced, or abandoned without touching th
 | `/health` | GET | liveness, and whether Salla credentials are configured |
 | `/catalog` | GET | the store's products, straight from Salla (`?page=` supported) |
 | `/cart` | POST | creates a guest cart; the response carries Salla's `checkout_url` |
-| `/cart/:id/items` | POST | adds a line — `{ identifier, quantity, options? }` |
+| `/cart/:id/items` | POST | adds a line — `{ identifier, quantity, options? }`, identified by product id (number) or sku (string) |
+| `/webhooks/salla` | POST | Salla's events; verifies `X-Salla-Signature` and stores or clears the store's tokens |
 
-Without `SALLA_STORE` and `SALLA_TOKEN` set, every route except `/health` answers `503`
-with a machine-readable error, so a misconfigured deploy fails loudly instead of quietly.
+Without `SALLA_STORE` every route except `/health` and the webhook answers `503` with a
+machine-readable error. The store's tokens arrive via the `app.store.authorize` webhook
+(Easy Mode), live in KV, and refresh themselves three days before the two-week expiry.
 
 ## The Salla surface it uses (verified against Salla's docs)
 
@@ -58,12 +60,15 @@ In production these are Cloudflare secrets, never committed and never sent to a 
 
 1. **Does a free Salla plan allow installing an app and taking online payments?** If it does not,
    this service is moot until the plan changes. Unverified.
-2. **Token lifetime and refresh.** Salla access tokens expire; this service will have to refresh
-   them, or the app will need re-authorization. Not implemented yet.
-3. **Checkout handoff details.** The cart response carries a `checkout_url`; the storefront should
-   send the shopper there. Whether the cart survives that hop on a free plan is unverified.
+2. **Token lifetime and refresh.** Answered: access tokens last 2 weeks; refresh tokens are
+   single-use and rotate on every refresh (1 month life; reuse revokes everything and forces a
+   reinstall). Implemented in `src/tokens.ts` — the new pair is persisted before use, refreshes
+   are single-flight.
+3. **Checkout handoff details.** The cart response carries a `checkout_url`; the storefront sends
+   the shopper there. Whether the cart survives that hop on the store's own plan is verified on
+   the demo store during setup.
 
 ## Not in scope yet
 
-Token refresh, webhooks, order reads, and anything customer-level. Add them when the store needs
-them, not before.
+Order reads and anything customer-level. Token refresh and the app webhooks are in; store
+webhooks (`order.created`, `product.*`) arrive when the shop needs notifications.

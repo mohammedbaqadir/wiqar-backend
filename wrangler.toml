@@ -6,3 +6,10 @@ compatibility_date = "2025-01-01"
 # [vars]
 # SALLA_APP_NAME = "wiqar-backend"
 # SALLA_APP_VERSION = "0.1.0"
+
+# Production keeps the store's tokens in KV so they survive restarts and the
+# refresh rotation. Create the namespace once, then uncomment:
+#   wrangler kv namespace create TOKENS
+# [[kv_namespaces]]
+# binding = "TOKENS"
+# id = "paste the id wrangler prints"

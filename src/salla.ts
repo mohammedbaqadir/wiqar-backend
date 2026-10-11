@@ -6,23 +6,25 @@
  *   - Checkout APIs  /store/v2/checkout   cart lifecycle         (store-scoped)
  *
  * None of it can run in a browser: Salla sends no CORS headers, and the token
- * must never leave the server.
+ * must never leave the server. `apiBase` is overridable, so the whole flow can
+ * be rehearsed against a local mock before it ever points at Salla.
  */
-
-const ADMIN = 'https://api.salla.dev/admin/v2';
-const CHECKOUT = 'https://api.salla.dev/store/v2/checkout';
 
 export interface SallaConfig {
   /** Store-Identifier — which store this service acts for. */
   store: string;
-  /** Bearer token minted when the app was installed. */
-  token: string;
   appName: string;
   appVersion: string;
+  apiBase: string;
+  authBase: string;
+  clientId?: string;
+  clientSecret?: string;
 }
 
+/** A line as the Checkout API wants it: identity, count, chosen options. */
 export interface CartLine {
-  identifier: number;
+  identifier_type: 'id' | 'sku';
+  identifier: number | string;
   quantity: number;
   options?: Array<{ name: string; value: string }>;
 }
@@ -44,8 +46,11 @@ interface Envelope {
   error?: { code?: string; message?: string; fields?: unknown };
 }
 
-const adminHeaders = (config: SallaConfig): HeadersInit => ({
-  Authorization: `Bearer ${config.token}`,
+const adminBase = (config: SallaConfig): string => `${config.apiBase}/admin/v2`;
+const checkoutBase = (config: SallaConfig): string => `${config.apiBase}/store/v2/checkout`;
+
+const adminHeaders = (token: string): HeadersInit => ({
+  Authorization: `Bearer ${token}`,
   'content-type': 'application/json',
 });
 
@@ -73,32 +78,31 @@ const read = async (response: Response): Promise<unknown> => {
 };
 
 /** Products, paginated (`data[]` plus pagination). Scope: products.read */
-export const listProducts = async (config: SallaConfig, page = 1): Promise<unknown> =>
-  read(await fetch(`${ADMIN}/products?page=${page}`, { headers: adminHeaders(config) }));
+export const listProducts = async (
+  config: SallaConfig,
+  token: string,
+  page = 1
+): Promise<unknown> =>
+  read(await fetch(`${adminBase(config)}/products?page=${page}`, { headers: adminHeaders(token) }));
 
 /** Categories. Scope: categories.read */
-export const listCategories = async (config: SallaConfig): Promise<unknown> =>
-  read(await fetch(`${ADMIN}/categories`, { headers: adminHeaders(config) }));
+export const listCategories = async (config: SallaConfig, token: string): Promise<unknown> =>
+  read(await fetch(`${adminBase(config)}/categories`, { headers: adminHeaders(token) }));
 
 /** A guest cart. The response carries its id and the checkout_url to hand over. */
 export const createCart = async (config: SallaConfig): Promise<unknown> =>
-  read(await fetch(`${CHECKOUT}/generate`, { method: 'POST', headers: checkoutHeaders(config) }));
+  read(await fetch(`${checkoutBase(config)}/generate`, { method: 'POST', headers: checkoutHeaders(config) }));
 
-/** Add a line to an existing cart, identified by Salla's product id. */
+/** Add one line to an existing cart, by product id or sku. Mutations echo the cart. */
 export const addItem = async (
   config: SallaConfig,
   cartId: string,
   line: CartLine
 ): Promise<unknown> =>
   read(
-    await fetch(`${CHECKOUT}/${encodeURIComponent(cartId)}/items`, {
+    await fetch(`${checkoutBase(config)}/${encodeURIComponent(cartId)}/items`, {
       method: 'POST',
       headers: checkoutHeaders(config),
-      body: JSON.stringify({
-        identifier_type: 'id',
-        identifier: line.identifier,
-        quantity: line.quantity,
-        options: line.options,
-      }),
+      body: JSON.stringify(line),
     })
   );
