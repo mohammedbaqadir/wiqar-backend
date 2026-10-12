@@ -27,7 +27,11 @@ beforeAll(() => {
 
       if (url.pathname === '/admin/v2/products') {
         return Response.json({
-          data: [{ id: 1, sku: 'WQ-001', urls: { customer: 'https://shop.example/dev/product-slug/p1' } }],
+          data: [
+            /* One malformed URL first: the index must skip it, not die on it. */
+            { id: 2, sku: 'WQ-002', urls: { customer: 'not a url' } },
+            { id: 1, sku: 'WQ-001', urls: { customer: 'https://shop.example/dev/product-slug/p1' } },
+          ],
           pagination: { totalPages: 1 },
         });
       }
@@ -89,6 +93,13 @@ describe('cart', () => {
       data: { id: string; checkout_url: string };
     };
     expect(payload.data.id).toBe('cart-9');
+    expect(payload.data.checkout_url).toBe('https://shop.example/dev/checkout/cart-9');
+  });
+
+  test('a malformed product URL is skipped, the index still builds', async () => {
+    const payload = (await (await call('/cart', { method: 'POST' })).json()) as {
+      data: { checkout_url: string };
+    };
     expect(payload.data.checkout_url).toBe('https://shop.example/dev/checkout/cart-9');
   });
 

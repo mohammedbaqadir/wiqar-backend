@@ -54,7 +54,7 @@ export const loadTokens = async (
       try {
         return JSON.parse(raw) as SallaTokens;
       } catch {
-        /* fall through to the memory/seed paths */
+        console.warn('stored tokens are not JSON — falling through to memory/seed');
       }
     }
   }

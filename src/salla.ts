@@ -133,7 +133,11 @@ export const catalogueIndex = async (config: SallaConfig, token: string): Promis
       if (sku !== '' && Number.isFinite(id)) bySku.set(sku.toUpperCase(), id);
       const productUrl = product.urls?.customer ?? product.urls?.storefront;
       if (storefrontBase === '' && typeof productUrl === 'string') {
-        storefrontBase = storefrontBaseOf(productUrl);
+        try {
+          storefrontBase = storefrontBaseOf(productUrl);
+        } catch {
+          /* One malformed URL must not poison the whole index. */
+        }
       }
     }
     totalPages = payload?.pagination?.totalPages ?? 1;
