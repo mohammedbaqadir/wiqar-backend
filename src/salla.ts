@@ -25,14 +25,16 @@ export interface SallaConfig {
 
 /** Salla's error envelope, surfaced so callers get a machine-readable failure. */
 export class SallaError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    message: string,
-    readonly fields?: unknown
-  ) {
+  readonly status: number;
+  readonly code: string;
+  readonly fields?: unknown;
+
+  constructor(status: number, code: string, message: string, fields?: unknown) {
     super(message);
     this.name = 'SallaError';
+    this.status = status;
+    this.code = code;
+    this.fields = fields;
   }
 }
 

@@ -86,6 +86,8 @@ testing locally.
 ```sh
 bun install
 bun run dev        # wrangler dev
+bun run check      # tsc --noEmit — TypeScript 7, the native compiler
+bun test           # the worker's logic against a mock Salla, no network
 bun run deploy     # wrangler deploy — Cloudflare Workers
 ```
 

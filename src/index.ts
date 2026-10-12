@@ -154,13 +154,14 @@ export default {
       });
     }
 
-    const item = pathname.match(/^\/cart\/([^/]+)\/items$/);
+    /* The cart id in /cart/:id/items, captured once and named. */
+    const cartParam = pathname.match(/^\/cart\/([^/]+)\/items$/)?.[1] ?? null;
 
     /* Which routes exist, before anything about configuration. */
     const isCatalog = pathname === '/catalog' && request.method === 'GET';
     const isCategories = pathname === '/categories' && request.method === 'GET';
     const isCart = pathname === '/cart' && request.method === 'POST';
-    const isItem = item !== null && request.method === 'POST';
+    const isItem = cartParam !== null && request.method === 'POST';
 
     if (!isCatalog && !isCategories && !isCart && !isItem) {
       return json({ status: false, error: { code: 'not_found', message: 'No such route.' } }, 404);
@@ -246,7 +247,7 @@ export default {
           },
         });
       }
-      if (isItem && item && identifier !== null) {
+      if (isItem && cartParam !== null && identifier !== null) {
         const index = await catalogueIndex(config, token);
         const productId =
           typeof identifier === 'number' ? identifier : index.bySku.get(identifier.toUpperCase());
@@ -262,7 +263,7 @@ export default {
             404
           );
         }
-        return json(await addToCart(config, item[1], productId, quantity));
+        return json(await addToCart(config, cartParam, productId, quantity));
       }
       return json({ status: false, error: { code: 'not_found', message: 'No such route.' } }, 404);
     } catch (error) {
