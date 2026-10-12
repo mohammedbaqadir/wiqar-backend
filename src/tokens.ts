@@ -87,9 +87,9 @@ export const freshAccessToken = async (
 
   /* An unknown expiry (env seed) counts as fresh; the webhook path sets real ones. */
   const fresh = tokens.expiresAt === null || Date.now() < tokens.expiresAt - SKEW_MS;
-  if (fresh || !tokens.refreshToken) {
-    if (!fresh) throw new ReauthRequired('the access token expired and there is no refresh token — reinstall the app');
-    return tokens.accessToken;
+  if (fresh) return tokens.accessToken;
+  if (!tokens.refreshToken) {
+    throw new ReauthRequired('the access token expired and there is no refresh token — reinstall the app');
   }
 
   if (!context.clientId || !context.clientSecret) {

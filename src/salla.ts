@@ -119,6 +119,7 @@ export const catalogueIndex = async (config: SallaConfig, token: string): Promis
   let storefrontBase = '';
   let page = 1;
   let totalPages = 1;
+  /* Read up to ten pages — a runaway guard far beyond the shop's size. */
   do {
     const payload = (await listProducts(config, token, page)) as {
       data?: ProductRow[];

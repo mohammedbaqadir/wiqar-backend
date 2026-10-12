@@ -58,10 +58,10 @@ const configFrom = (env: Env): SallaConfig | null =>
       }
     : null;
 
-const refreshContext = (env: Env, config: SallaConfig): RefreshContext => ({
+const refreshContext = (config: SallaConfig): RefreshContext => ({
   authBase: config.authBase,
-  clientId: env.SALLA_CLIENT_ID ?? '',
-  clientSecret: env.SALLA_CLIENT_SECRET ?? '',
+  clientId: config.clientId ?? '',
+  clientSecret: config.clientSecret ?? '',
 });
 
 const failure = (error: unknown): Response => {
@@ -133,6 +133,7 @@ export default {
         const tokens = tokensFromAuthorize(body?.data);
         if (tokens) await saveTokens(env.TOKENS, tokens);
         console.log(`app.store.authorize: ${tokens ? 'tokens stored' : 'payload unusable'}`);
+        /* 200 either way: a retry cannot fix an unusable payload. */
         return json({ status: Boolean(tokens) });
       }
       if (event === 'app.uninstalled') {
@@ -217,21 +218,22 @@ export default {
     }
 
     try {
+      /* Every route below reads with the store's token — fetch it once. */
+      const token = await freshAccessToken(env.TOKENS, env.SALLA_TOKEN, refreshContext(config));
+
       if (isCatalog) {
-        const token = await freshAccessToken(env.TOKENS, env.SALLA_TOKEN, refreshContext(env, config));
         const page = Number(searchParams.get('page') ?? '1');
         return json(await cached(`catalog:${page}`, 120_000, () => listProducts(config, token, page)));
       }
       if (isCategories) {
-        const token = await freshAccessToken(env.TOKENS, env.SALLA_TOKEN, refreshContext(env, config));
         return json(await cached('categories', 300_000, () => listCategories(config, token)));
       }
       if (isCart) {
-        const token = await freshAccessToken(env.TOKENS, env.SALLA_TOKEN, refreshContext(env, config));
         const index = await catalogueIndex(config, token);
         const cart = (await latestCart(config)) as {
           data?: { id?: unknown; cart?: { id?: unknown } };
         };
+        /* Salla nests the cart id either at data.cart.id or data.id — take whichever arrived. */
         const cartId = cart?.data?.cart?.id ?? cart?.data?.id;
         if (cartId === undefined || cartId === null) return json(cart);
         return json({
@@ -245,7 +247,6 @@ export default {
         });
       }
       if (isItem && item && identifier !== null) {
-        const token = await freshAccessToken(env.TOKENS, env.SALLA_TOKEN, refreshContext(env, config));
         const index = await catalogueIndex(config, token);
         const productId =
           typeof identifier === 'number' ? identifier : index.bySku.get(identifier.toUpperCase());
