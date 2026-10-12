@@ -22,6 +22,9 @@ builds and browses without it; buying runs through it.
 | `/cart/:id/items` | POST | adds one line — `{identifier, quantity}`; identifier is a SKU (string) or a product id (number) |
 | `/webhooks/salla` | POST | verifies `X-Salla-Signature`; stores tokens on `app.store.authorize`, clears them on `app.uninstalled` |
 
+`/catalog` and `/categories` answers are cached per-isolate for two to five minutes — a hot
+loop on the public GETs cannot spend the store token's rate budget upstream.
+
 Without `SALLA_STORE`, everything except `/health` and the webhook answers `503` with a
 machine-readable error. There are deliberately no product-write routes: this worker reads the
 catalogue and builds carts. When the real-store import runs, write routes come back behind a

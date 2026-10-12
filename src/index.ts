@@ -77,6 +77,24 @@ const failure = (error: unknown): Response => {
   );
 };
 
+/* Short-lived, per-isolate copy of the public GETs: a hot loop on /catalog or
+   /categories cannot spend the store token's rate budget upstream. Only
+   successes are cached, and the map is capped so made-up page numbers cannot
+   grow it. */
+const responseCache = new Map<string, { at: number; payload: unknown }>();
+
+const cached = async (key: string, ttlMs: number, load: () => Promise<unknown>): Promise<unknown> => {
+  const hit = responseCache.get(key);
+  if (hit && Date.now() - hit.at < ttlMs) return hit.payload;
+  const payload = await load();
+  if (responseCache.size >= 32) {
+    const oldest = responseCache.keys().next().value;
+    if (oldest !== undefined) responseCache.delete(oldest);
+  }
+  responseCache.set(key, { at: Date.now(), payload });
+  return payload;
+};
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const { pathname, searchParams } = new URL(request.url);
@@ -85,10 +103,18 @@ export default {
 
     /* The webhook runs before anything else is configured — it delivers the tokens. */
     if (pathname === '/webhooks/salla' && request.method === 'POST') {
-      const raw = await request.text();
+      /* Refuse unsigned deliveries before the body is even read. */
       const secret = env.WEBHOOK_SECRET;
       const signature = request.headers.get('x-salla-signature') ?? '';
-      if (!secret || !signature || !(await signatureMatches(secret, raw, signature))) {
+      if (!secret || !signature) {
+        return json(
+          { status: false, error: { code: 'unauthorized', message: 'Signature mismatch.' } },
+          401
+        );
+      }
+
+      const raw = await request.text();
+      if (!(await signatureMatches(secret, raw, signature))) {
         return json(
           { status: false, error: { code: 'unauthorized', message: 'Signature mismatch.' } },
           401
@@ -171,7 +197,7 @@ export default {
       }
 
       if (typeof body.quantity === 'number' && Number.isFinite(body.quantity) && body.quantity > 0) {
-        quantity = Math.floor(body.quantity);
+        quantity = Math.min(Math.floor(body.quantity), 9999);
       }
     }
 
@@ -193,11 +219,12 @@ export default {
     try {
       if (isCatalog) {
         const token = await freshAccessToken(env.TOKENS, env.SALLA_TOKEN, refreshContext(env, config));
-        return json(await listProducts(config, token, Number(searchParams.get('page') ?? '1')));
+        const page = Number(searchParams.get('page') ?? '1');
+        return json(await cached(`catalog:${page}`, 120_000, () => listProducts(config, token, page)));
       }
       if (isCategories) {
         const token = await freshAccessToken(env.TOKENS, env.SALLA_TOKEN, refreshContext(env, config));
-        return json(await listCategories(config, token));
+        return json(await cached('categories', 300_000, () => listCategories(config, token)));
       }
       if (isCart) {
         const token = await freshAccessToken(env.TOKENS, env.SALLA_TOKEN, refreshContext(env, config));
