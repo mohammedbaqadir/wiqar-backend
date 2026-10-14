@@ -101,6 +101,16 @@ export default {
 
     if (request.method === 'OPTIONS') return json({ status: true });
 
+    /* A polite answer for anyone who clicks the Worker's URL. */
+    if (pathname === '/' && request.method === 'GET') {
+      return json({
+        status: true,
+        name: 'wiqar-backend',
+        about: "The wiqar storefront's API: reads the Salla catalogue and builds guest carts.",
+        routes: ['/health', '/catalog', '/categories', '/cart', '/cart/:id/items', '/webhooks/salla'],
+      });
+    }
+
     /* The webhook runs before anything else is configured — it delivers the tokens. */
     if (pathname === '/webhooks/salla' && request.method === 'POST') {
       /* Refuse unsigned deliveries before the body is even read. */
