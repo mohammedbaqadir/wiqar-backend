@@ -34,6 +34,17 @@ export interface Env {
   TOKENS?: TokenStore;
 }
 
+/* Every response this Worker sends carries the same baseline security headers. */
+const SECURITY_HEADERS = {
+  'strict-transport-security': 'max-age=31536000; includeSubDomains',
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'strict-origin-when-cross-origin',
+  'permissions-policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+  'cross-origin-opener-policy': 'same-origin',
+  'x-frame-options': 'DENY',
+  'content-security-policy': "default-src 'none'; frame-ancestors 'none'",
+} as const;
+
 const json = (data: unknown, status = 200): Response =>
   new Response(JSON.stringify(data), {
     status,
@@ -43,6 +54,7 @@ const json = (data: unknown, status = 200): Response =>
       'access-control-allow-origin': '*',
       'access-control-allow-headers': 'content-type',
       'access-control-allow-methods': 'GET, POST, OPTIONS',
+      ...SECURITY_HEADERS,
     },
   });
 
